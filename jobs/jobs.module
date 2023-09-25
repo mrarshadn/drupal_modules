@@ -1,0 +1,415 @@
+<?php
+/**
+ * Implements hook_menu().
+ */
+function jobs_menu() {
+  $items = array();
+
+
+  // Menu item for the listing page.
+  $items['jobs'] = array(
+    'title' => 'Job Listings',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('jobs_listings_form'),
+    'access callback' => true,
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+
+  // Menu item for creating job listings.
+  $items['jobs/create'] = array(
+    'title' => 'Create Job Listing',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('jobs_create_form'),
+    'access callback' => 'jobs_create_access', // Custom access callback function.
+    'type' => MENU_NORMAL_ITEM, // Adjust the menu item type as needed.
+  );
+
+
+  // Menu item for editing job listings.
+  $items['jobs/edit/%node'] = array(
+    'title' => 'Edit Job Listing',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('jobs_edit_form', 2), // Pass the node ID as an argument.
+    'access callback' => 'jobs_edit_access', // Custom access callback function.
+    'access arguments' => array(2), // Pass the node ID to the access callback.
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['jobs/delete/%node'] = array(
+    'title' => 'Delete Job Listing',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('jobs_delete_form', 2), // Pass the node ID as an argument.
+    'access callback' => 'jobs_delete_access', // Custom access callback function.
+    'access arguments' => array(2), // Pass the node ID to the access callback.
+    'type' => MENU_CALLBACK,
+  );
+
+  // Define other menu items as needed.
+
+  return $items;
+}
+
+
+function jobs_permission() {
+  return array(
+    'access_content' => array(
+      'title' => t('Default Access Content'),
+      'description' => t('Default Access Content'),
+    ),
+    'create_job' => array(
+      'title' => t('Create job listings'),
+      'description' => t('Create new job listings.'),
+    ),
+    'edit_job' => array(
+      'title' => t('Edit own job listings'),
+      'description' => t('Edit job listings created by the user.'),
+    ),
+    'delete_job' => array(
+      'title' => t('Delete own job listings'),
+      'description' => t('Delete job listings created by the user.'),
+    ),
+  );
+}
+
+/**
+ * Access callback for the create job listing page.
+ */
+function jobs_create_access() {
+  // Check if the user has permission to create job listings.
+  return user_access('create_job'); // Adjust the permission name as needed.
+}
+
+/**
+ * Access callback for the edit job listing page.
+ */
+function jobs_edit_access($node) {
+
+  // Check if the user has permission to edit job listings.
+  return  (user_access('edit_job') && $node && $node->type == 'job_listing');
+}
+
+/**
+ * Access callback for the delete job listing page.
+ */
+function jobs_delete_access($node) {
+  // Load the node by node ID.
+//  $node = node_load($node_id);
+
+  // Check if the user has permission to delete job listings.
+  if (user_access('delete_job') && $node->type == 'job_listing') {
+    return TRUE;
+  }
+
+  // If the user doesn't have permission or the node doesn't exist or is of the wrong type, deny access.
+  return FALSE;
+}
+/**
+ * Form callback for confirming the deletion of a job listing.
+ */
+/**
+ * Form callback for the job listings page.
+ */
+function jobs_listings_form($form, &$form_state) {
+  // Query to retrieve all job listings (assuming your content type is 'job_listing').
+  $query = new EntityFieldQuery();
+  $query->entityCondition('entity_type', 'node')
+    ->entityCondition('bundle', 'job_listing') // Replace 'job_listing' with your content type's machine name.
+    ->propertyCondition('status', 1) // Published nodes.
+    ->propertyOrderBy('created', 'DESC'); // Sort by creation date (newest first).
+
+  // Execute the query.
+  $result = $query->execute();
+
+  // Check if there are job listings.
+  if (!empty($result['node'])) {
+    $job_ids = array_keys($result['node']);
+
+    // Load the job listings.
+    $jobs = node_load_multiple($job_ids);
+
+    // Create a table to display job listings.
+    $header = array(t('Title'),t('Description'), t('Company Name'), t('Location'), t('Application Deadline'), t('Job Category'));
+    $rows = array();
+
+    foreach ($jobs as $job) {
+      $deadline = '';
+      $deadline_obj = json_decode(((isset($job->application_deadline['und'])) ? $job->application_deadline['und'][0]['value'] : ''));
+      if($deadline_obj && $deadline_obj->year){
+        $deadline = date('Y-m-d',strtotime($deadline_obj->year .'-'.$deadline_obj->month.'-'.$deadline_obj->day));
+      }
+      $category ='';
+      if(isset($job->job_category['und']) && !is_null($job->job_category['und'][0]['target_id'])){
+        $term = entity_load('taxonomy_term', FALSE, array('tid' => $job->job_category['und'][0]['target_id']));
+        $term = reset($term);
+        $category = $term->name;
+      }
+      $rows[] = array(
+        l($job->title, 'jobs/edit/' . $job->nid), // Link to the job node.
+        ((isset($job->job_description['und'])) ? $job->job_description['und'][0]['value'] : $job->job_description),
+        ((isset($job->company_name['und'])) ? $job->company_name['und'][0]['value'] : $job->company_name),
+        ((isset($job->job_location['und'])) ? $job->job_location['und'][0]['value'] : $job->job_location),
+        $deadline,
+        $category,
+
+      );
+    }
+
+    $form['jobs_table'] = array(
+      '#theme' => 'table',
+      '#header' => $header,
+      '#rows' => $rows,
+    );
+  }
+  else {
+    $form['no_jobs'] = array(
+      '#markup' => t('There are currently no job listings.'),
+    );
+  }
+
+  return $form;
+}
+/**
+ * Form callback for creating a new job listing.
+ */
+function jobs_create_form($form, &$form_state) {
+  // Initialize the form array.
+  $form = array();
+
+  // Title field.
+  $form['title'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Title'),
+    '#required' => TRUE,
+  );
+
+  // Job Description field.
+  $form['job_description'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Job Description'),
+    '#required' => TRUE,
+  );
+
+  // Job Location field.
+  $form['job_location'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Job Location'),
+  );
+
+  // Company Name field.
+  $form['company_name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Company Name'),
+  );
+
+  // Application Deadline field.
+  $form['application_deadline'] = array(
+    '#type' => 'date',
+    '#title' => t('Application Deadline'),
+  );
+
+  $vocabulary = taxonomy_vocabulary_machine_name_load('job_categories');
+  $terms = entity_load('taxonomy_term', FALSE, array('vid' => $vocabulary->vid));
+
+  $terms_data = [];
+  foreach ($terms as $term){
+    $terms_data[$term->tid] = $term->name;
+  }
+
+  // Job Category Reference field (if it's a reference field).
+  $form['job_category'] = array(
+    '#title' => t('Job Category'), // Replace with your desired field label.
+    '#type' => 'select',
+    '#default_value' => array(), // Set default values if needed.
+    '#options' => $terms_data,
+  );
+
+  // Add more fields as needed following the same pattern.
+
+  // Submit button.
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Create Job Listing'),
+  );
+
+  return $form;
+}
+
+/**
+ * Form submission handler for creating a new job listing.
+ */
+function jobs_create_form_submit($form, &$form_state) {
+  global $user;
+  // Extract the submitted values from the form state.
+  $values = $form_state['values'];
+
+  // Create a new job listing node.
+  $node = new stdClass();
+  $node->type = 'job_listing';
+  $node->title = $values['title'];
+  $node->uid = $user->uid;
+  $node->status = NODE_PUBLISHED;
+  $node->comment = 0;
+
+
+
+  $node->job_description['und'][0]['value'] = $form_state['values']['job_description'];
+  $node->job_location['und'][0]['value'] = $form_state['values']['job_location'];
+  $node->company_name['und'][0]['value'] = $form_state['values']['company_name'];
+  $node->application_deadline['und'][0]['value'] = json_encode($form_state['values']['application_deadline']);
+  $node->job_category['und'][0]['target_id'] = $form_state['values']['job_category'];
+
+  node_save($node);
+
+
+  // Save the new job listing node.
+
+
+
+  // Optionally, redirect to the created job listing or another page.
+  drupal_set_message(t('The job listing "%title" has been created.', array('%title' => $node->title)));
+  drupal_goto('jobs');
+}
+
+function jobs_delete_form($form, &$form_state, $node_id) {
+  // Load the node by node ID.
+  $node = node_load($node_id);
+
+  if ($node) {
+    // Confirm deletion message.
+    $form['confirmation_message'] = array(
+      '#markup' => t('Are you sure you want to delete the job listing: %title?', array('%title' => $node->title)),
+    );
+
+    // Hidden field to store the node ID.
+    $form['node_id'] = array(
+      '#type' => 'hidden',
+      '#value' => $node_id,
+    );
+
+    // Submit button to confirm deletion.
+    $form['submit'] = array(
+      '#type' => 'submit',
+      '#value' => t('Delete'),
+    );
+  }
+  else {
+    // Node not found or invalid.
+    drupal_set_message(t('The requested job listing does not exist or cannot be deleted.'), 'error');
+    drupal_goto(); // Redirect to another page as needed.
+  }
+
+  return $form;
+}
+
+/**
+ * Form callback for editing a job listing.
+ */
+function jobs_edit_form($form, &$form_state, $node) {
+  // Initialize the form array.
+  $form = array();
+
+  // Title field.
+  $form['title'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Title'),
+    '#default_value' => $node->title,
+    '#required' => TRUE,
+  );
+
+  // Job Description field.
+  $form['job_description'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Job Description'),
+    '#default_value' => $node->job_description['und'][0]['value'],
+    '#required' => TRUE,
+  );
+
+  // Job Location field.
+  $form['job_location'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Job Location'),
+    '#default_value' => $node->job_location['und'][0]['value'],
+  );
+
+  // Company Name field.
+  $form['company_name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Company Name'),
+    '#default_value' => $node->company_name['und'][0]['value'],
+  );
+
+
+  // Application Deadline field.
+  $form['application_deadline'] = array(
+    '#type' => 'date',
+    '#title' => t('Application Deadline'),
+    '#default_value' => json_decode($node->application_deadline['und'][0]['value'],true),
+  );
+
+
+
+  $vocabulary = taxonomy_vocabulary_machine_name_load('job_categories');
+  $terms = entity_load('taxonomy_term', FALSE, array('vid' => $vocabulary->vid));
+
+  $terms_data = [];
+  foreach ($terms as $term){
+    $terms_data[$term->tid] = $term->name;
+  }
+
+  // Job Category Reference field (if it's a reference field).
+  $form['job_category'] = array(
+    '#title' => t('Job Category'), // Replace with your desired field label.
+    '#type' => 'select',
+    '#default_value' => $node->job_category['und'][0]['target_id'],
+    '#options' => $terms_data,
+  );
+
+  // Submit button.
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Save Changes'),
+  );
+
+  // Store the node ID as a hidden form field.
+  $form['node_id'] = array(
+    '#type' => 'hidden',
+    '#value' => $node->nid,
+  );
+
+  return $form;
+}
+/**
+ * Form submission handler for editing a job listing.
+ */
+function jobs_edit_form_submit($form, &$form_state) {
+  $node_id = $form_state['values']['node_id'];
+
+
+  $node = node_load($node_id);
+
+
+  if ($node) {
+    // Update the node fields based on the form submissions.
+    $node->title = $form_state['values']['title'];
+    $node->job_description['und'][0]['value'] = $form_state['values']['job_description'];
+    $node->job_location['und'][0]['value'] = $form_state['values']['job_location'];
+    $node->company_name['und'][0]['value'] = $form_state['values']['company_name'];
+    $node->application_deadline['und'][0]['value'] = json_encode($form_state['values']['application_deadline']);
+    $node->job_category['und'][0]['target_id'] = $form_state['values']['job_category'];
+
+    // Save the updated job listing node.
+    node_save($node);
+
+    // Display a confirmation message.
+    drupal_set_message(t('The changes to the job listing "%title" have been saved.', array('%title' => $node->title)));
+
+    // Redirect to another page after editing.
+    drupal_goto('jobs');
+  }
+}
+
+
+
+
+

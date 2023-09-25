@@ -1,0 +1,5 @@
+name = "Jobs"
+description = "Custom module for managing job listings."
+core = 7.x
+dependencies[] = views
+dependencies[] = entity
